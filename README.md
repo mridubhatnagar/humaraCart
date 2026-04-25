@@ -109,4 +109,4 @@ This is not a chatbot for Instamart. It is a new interface layer for how househo
 
 ---
 
-*Built on Swiggy Instamart MCP | Contact: mridubhatnagar4@gmail.com*
+*Built on Swiggy Instamart MCP | Contact: [mridubhatnagar](https://www.linkedin.com/in/mridu-bhatnagar-17703a92/)*
