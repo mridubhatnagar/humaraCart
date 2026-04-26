@@ -50,12 +50,43 @@ WhatsApp is where Indian households already communicate. Any channel that requir
 
 ---
 
+## System Overview
+
+```mermaid
+flowchart LR
+    subgraph Household
+        AH[Account Holder]
+        M1[Member 1]
+        M2[Member 2]
+        AH -->|invite link| M1 & M2
+    end
+
+    subgraph Swiggy
+        Auth[OAuth Server]
+        MCP[Instamart MCP Server]
+        Cart[Instamart Cart]
+    end
+
+    AH -->|"① adds HumaraCart bot on WhatsApp"| Bot[HumaraCart Bot]
+    M1 & M2 <-->|WhatsApp| Bot
+    Bot <--> BE[Backend + AI Agent\nMCP Client]
+    Bot -.->|"② sends Swiggy OAuth link"| AH
+    AH -.->|"③ authorize"| Auth
+    Auth <-.->|"④ code exchange → access token"| BE
+    BE -.->|"⑤ authorization confirmed"| Bot
+    Bot -.->|"⑥ setup complete"| AH
+    BE <-->|MCP calls| MCP
+    MCP <--> Cart
+```
+
+---
+
 ## How It Works
 
 **Setup (done once by the account holder):**
 - The account holder saves the HumaraCart number, initiates a chat, and links their existing Instamart account via OAuth. No new account needed.
-- The bot generates an invite link with a JWT token encoding the household ID, expiry, and a tamper-proof signature. The account holder forwards this to other members.
-- New members tap the link, WhatsApp opens with the token prefilled, and the bot adds them to the household. Expired or already-used tokens are rejected.
+- The bot generates a secure invite link. The account holder forwards this to other members.
+- New members tap the link, WhatsApp opens, and the bot adds them to the household.
 - The bot greets new members: *"Welcome to HumaraCart, powered by Swiggy Instamart. You have joined Priya's Household. Orders are fulfilled by Instamart via Priya's account. You do not need one."*
 - Brand preferences are configured upfront for common items.
 
@@ -67,9 +98,9 @@ WhatsApp is where Indian households already communicate. Any channel that requir
 
 **Ordering:**
 - Any member can nudge the account holder: `ready to order`. The bot forwards it: *"Priya thinks the cart is ready. Want to review?"*
-- The account holder sends `send cart link`. The bot sends a full summary first.
-- The account holder makes any last minute changes. Once satisfied, they send `confirm`.
-- The agent builds the cart on Instamart via MCP on behalf of the account holder. If a shareable cart link is available via the MCP, it is sent directly. Otherwise the account holder is notified to open Instamart where their cart is already populated.
+- The account holder sends `send cart link`. The bot sends a full summary of the current cart.
+- The cart is already pre-populated on Instamart — built continuously via MCP as members added and removed items throughout the day.
+- If a shareable cart link is available via the MCP or API, it is sent directly. Otherwise the account holder is notified to open Instamart where their cart is already populated.
 - The account holder checks out on Instamart directly. The agent's job ends at cart creation.
 - Delivery updates are shared with all household members via the bot.
 
@@ -77,6 +108,46 @@ WhatsApp is where Indian households already communicate. Any channel that requir
 - Members can be added or removed at any time.
 - Switching households creates a new group ID on the backend. Before creation, the backend checks if a household with the same members already exists to avoid duplicates.
 - Households are fully isolated. No cross-household visibility.
+
+---
+
+## How We Plan to Use Swiggy Instamart MCP
+
+Our backend acts as the MCP Client. Every cart action is driven by Instamart MCP tool calls.
+
+> **Note:** For a detailed step-by-step MCP tool call flow, see the sequence diagram [here](./SEQUENCE_DIAGRAM.md).
+
+| Tool | Triggered When | What It Enables |
+|------|---------------|-----------------|
+| `search_products` | Member adds an item | Finds the right product on Instamart |
+| `update_cart` | Item added or removed | Modifies the shared household cart |
+| `get_cart` | After every cart change | Fetches current state to broadcast to all members |
+| `checkout` | V3: agent places order on household's behalf | Used when auto-restock is enabled or account holder grants agent permission to order on approval |
+| `track_order` | After order is placed | Fetches live order status for broadcast |
+| `get_orders` | V2: purchase patterns | Enables reorder reminders based on history |
+
+> **Open question for Swiggy:** Does the MCP or any API expose a shareable cart link?
+> - **If yes:** Agent sends the cart link directly to the account holder via WhatsApp.
+> - **If no:** Agent notifies the account holder — *"Cart link unavailable. Open Instamart — your cart is ready."*
+
+---
+
+## Security
+
+**Invite system**
+Invite links are signed with a short-lived JWT encoding the household ID and an expiry. Tokens are single-use and tamper-proof. Expired or reused tokens are rejected.
+
+**Instamart OAuth**
+The account holder links their Instamart account via OAuth. HumaraCart never handles credentials directly — it operates via an access token scoped to cart and order actions only.
+
+**Household isolation**
+All household data is scoped to a group ID on the backend. No member can access or influence another household's cart.
+
+**Cart control stays with the account holder**
+The bot only builds the cart. Checkout is always a manual action by the account holder. In V1 and V2, no order is ever placed without explicit confirmation.
+
+**Member management**
+The account holder can remove members at any time. Removed members lose access immediately.
 
 ---
 
