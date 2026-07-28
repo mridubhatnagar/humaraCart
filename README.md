@@ -1,5 +1,8 @@
 # HumaraCart: A Collaborative Household Instamart Assistant
 ### Swiggy Builders Club: Developer Program Application
+### Running on Swiggy's Instamart MCP
+
+Full application — architecture, MCP integration, security model, roadmap: [mridulabs.dev/swiggy-builders-club-application](https://mridulabs.dev/swiggy-builders-club-application)
 
 ---
 
@@ -30,12 +33,6 @@ This is the vision.
 
 ---
 
-## The Challenge
-
-WhatsApp Business API does not natively support group bots. A bot cannot be added as a member of a WhatsApp group.
-
----
-
 ## The Workaround
 
 Each household member has a 1:1 conversation with the bot. On the backend, all members are mapped to a shared household group ID. Every addition is reflected in one unified list. Members who opt in receive the updated list after every addition.
@@ -47,37 +44,6 @@ The user experience is identical to the group vision. The difference is only und
 ## Why WhatsApp
 
 WhatsApp is where Indian households already communicate. Any channel that requires a new app or a new habit creates drop-off before the product gets a chance. WhatsApp is not a technical convenience. It is where the user already is.
-
----
-
-## System Overview
-
-```mermaid
-flowchart LR
-    subgraph Household
-        AH[Account Holder]
-        M1[Member 1]
-        M2[Member 2]
-        AH -->|invite link| M1 & M2
-    end
-
-    subgraph Swiggy
-        Auth[OAuth Server]
-        MCP[Instamart MCP Server]
-        Cart[Instamart Cart]
-    end
-
-    AH -->|"① adds HumaraCart bot on WhatsApp"| Bot[HumaraCart Bot]
-    M1 & M2 <-->|WhatsApp| Bot
-    Bot <--> BE[Backend + AI Agent\nMCP Client]
-    Bot -.->|"② sends Swiggy OAuth link"| AH
-    AH -.->|"③ authorize"| Auth
-    Auth <-.->|"④ code exchange → access token"| BE
-    BE -.->|"⑤ authorization confirmed"| Bot
-    Bot -.->|"⑥ setup complete"| AH
-    BE <-->|MCP calls| MCP
-    MCP <--> Cart
-```
 
 ---
 
@@ -128,71 +94,19 @@ The backend acts as the MCP client, receiving WhatsApp messages, resolving house
 
 ---
 
-## How We Plan to Use Swiggy Instamart MCP?
+## Getting Started
 
-Our backend acts as the MCP Client. Every cart action is driven by Instamart MCP tool calls.
+**Prerequisites:** a Twilio account with the [WhatsApp Sandbox](https://console.twilio.com/us1/develop/sms/try-it-out/whatsapp-learn) joined, and an OpenAI API key.
 
-> **Note:** For a detailed step-by-step MCP tool call flow, see the sequence diagram [here](./SEQUENCE_DIAGRAM.md).
+```bash
+cp .env.example .env.local        # fill in Twilio, OpenAI, JWT secret (see comments in the file)
+ngrok http 8000                   # separate terminal, keep it running — copy the forwarding URL
+docker compose run --rm test      # offline suite — mock Instamart, in-memory DB
+docker compose up app             # serves on :8000
+```
+Set `OAUTH_REDIRECT_URI=<ngrok-url>/oauth/callback` in `.env.local`, and point the Sandbox's webhook (Messaging → Settings → "When a message comes in") at `<ngrok-url>/webhook`.
 
-| Tool | Triggered When | What It Enables |
-|------|---------------|-----------------|
-| `search_products` | Member adds an item | Finds the right product on Instamart |
-| `update_cart` | Item added or removed | Modifies the shared household cart |
-| `get_cart` | After every cart change | Fetches current state to broadcast to all members |
-| `get_payment_options` | Before checkout | Shows the account holder the available payment methods (UPI apps, QR, COD) |
-| `checkout` | Account holder confirms the order | Places the order in-chat — for UPI, returns a payment link the holder taps to pay; the order finalizes on payment |
-| `track_order` | After order is placed | Fetches live order status for broadcast |
-| `get_orders` | V2: purchase patterns | Enables reorder reminders based on history |
-
-> **Cart link — resolved:** the MCP exposes **no** shareable cart link — and it doesn't need one. The cart syncs to the account holder's Instamart, and the agent **places the order and takes payment right in WhatsApp** (a UPI payment link, or COD). No app hand-off.
-
----
-
-## Security
-
-**Invite system**
-Invite links are signed with a short-lived JWT encoding the household ID and an expiry. Tokens are single-use and tamper-proof. Expired or reused tokens are rejected.
-
-**Instamart OAuth**
-The account holder links their Instamart account via OAuth. HumaraCart never handles credentials directly — it operates via an access token scoped to cart and order actions only.
-
-**Household isolation**
-All household data is scoped to a group ID on the backend. No member can access or influence another household's cart.
-
-**Cart control stays with the account holder**
-No order is ever placed without the account holder's **explicit confirmation** — the holder reviews the full bill and approves before the bot calls checkout. HumaraCart never handles or stores payment details; payment is completed through Swiggy.
-
-**Member management**
-The account holder can remove members at any time. Removed members lose access immediately.
-
----
-
-## The Trust Arc
-
-**V1: Collaborative Cart**
-Agent builds the cart from household inputs. The account holder reviews, confirms, and the agent places the order — in WhatsApp. Trust is established.
-
-**V2: Household Intelligence**
-- Agent learns from order history and identifies purchase patterns. Reminds: *"You usually buy milk every 5 days. It has been 4 days. Want to add it?"*
-- Nudges the account holder when the cart has been idle: *"You have 5 items in your cart. Ready to order?"*
-
-**V3: Auto-Order (opt-in)**
-Routine items can be set to auto-order for users who have explicitly granted the agent permission. Fully opt-in and item-specific.
-
-Each stage earns the next. Trust is not assumed. It is built incrementally.
-
----
-
-## Why This Matters for Swiggy
-
-Most Instamart use cases optimise for the individual user. HumaraCart treats the **household as the unit**, which is how grocery shopping actually works in India.
-
-- **Higher order value:** a cart built by 3-4 people is larger than a cart built by 1
-- **Higher retention:** shared utility is stickier than individual utility; churning means letting your household down
-- **Reduced browse friction:** users never open the app to search; the agent handles discovery via Swiggy's MCP tools
-- **V3 auto-order:** routine household replenishment becomes a recurring GMV stream with zero active user effort
-
-This is not a chatbot for Instamart. It is a new interface layer for how households shop.
+Then message the Sandbox number to onboard as the account holder — no seed data needed. (`scripts/seed_household.py` is a local-dev shortcut for the same OAuth login, skipping the WhatsApp round trip.)
 
 ---
 

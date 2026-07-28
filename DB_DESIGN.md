@@ -82,15 +82,14 @@ means an account **at our end**; the holder is simply the one who *also* linked 
 - Data captured via invite link needs no prompting: `phone` (from `From`) + `name`
   (from `ProfileName`) both arrive in the first WhatsApp message.
 
-**Token refresh — DECIDED: design for refresh (auto-refresh).** Store
-`instamart_refresh_token`; on expiry, refresh the access token instead of making the
-holder re-consent.
-- **⚠️ Caveat (verify at build):** our live token exchange returned **no
-  `refresh_token`** (keys: `access_token, token_type, expires_in, user_id, tid`),
-  even though the AS advertises the `refresh_token` grant. So we must confirm a
-  refresh token can actually be obtained — possibly via an `offline_access`-style
-  scope/param, or it may be **not issued yet**. If unavailable, the same fields fall
-  back to **re-consent** (leave `instamart_refresh_token` `NULL`).
+**Token refresh — RESOLVED: not obtainable, falls back to re-consent.** Confirmed via
+two independent live token exchanges (most recently `scripts/verify_mcp_client.py`,
+run inside docker): the response **never includes `refresh_token`** — keys are
+always exactly `access_token, token_type, expires_in, user_id, tid` — even though
+the AS advertises the `refresh_token` grant. Not a transient fluke; treated as
+**not issued** by this OAuth server. `instamart_refresh_token` stays `NULL` for
+every `Account`; on access-token expiry (~5 days), the holder **re-consents**
+(re-runs OAuth) rather than a silent refresh. No further verification needed here.
 
 **Security — DECIDED: encrypt at rest (from V1).** These are real bearer credentials
 to users' live Instamart accounts — plaintext-at-rest is a corner we won't cut, even
@@ -284,6 +283,10 @@ visibility/revocation (not needed for V1).
 local-as-truth, roles on the join, dedup-by-phone, single-use ledger).
 
 **Verify at build time** (runtime unknowns, not design gaps):
-- Whether a `refresh_token` can actually be obtained (live test returned none — see §1);
-  if not, the same fields fall back to re-consent.
-- The inner `data` field names for `get_cart` (parse defensively on first real call).
+- ~~Whether a `refresh_token` can actually be obtained~~ — **RESOLVED**: confirmed
+  absent across two independent live token exchanges; falls back to re-consent (§1).
+- The inner `data` field names for `get_cart` — **partially verified**: top-level
+  fields (`cartId`, `selectedAddress`, `cartTotalAmount`, `billBreakdown.toPay`)
+  parsed correctly live via `McpInstamartClient`. The per-item field name inside
+  `items[]` (`spinId` vs `itemId`) is still unverified — both live runs hit an
+  empty cart, so no item row has been inspected yet.

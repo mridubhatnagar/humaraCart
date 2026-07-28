@@ -1,0 +1,24 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env.local
+        required: false
+    environment:
+      DATABASE_URL: "sqlite:////app/data/humaracart.db"
+    volumes:
+      - .:/app
+      - ./data:/app/data
+
+  test:
+    build: .
+    command: pytest
+    env_file:
+      - path: .env.local
+        required: false
+    environment:
+      DATABASE_URL: "sqlite:///:memory:"
+    volumes:
+      - .:/app

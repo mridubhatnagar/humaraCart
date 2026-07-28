@@ -1,37 +1,88 @@
 """The single seam between HumaraCart and Instamart.
 
-Everything above this interface (cart logic, intent handling, WhatsApp) is
-written against `InstamartClient` and never against a concrete backend. For the
-demo the backend is `MockInstamartClient` (dummy catalog, in-memory carts).
-When production credentials arrive, a `McpInstamartClient` implements the same
-three methods by calling the real Swiggy Instamart MCP tools — and nothing that
-consumes this interface has to change.
+Everything above this interface (the guard, the agent) is written against
+`IInstamartClient` and never against a concrete backend — `McpInstamartClient`
+(real MCP) and `MockInstamartClient` (test double, no network/login) implement
+it. The methods mirror Swiggy's actual MCP tool shapes directly (per
+`IMPLEMENTATION_PLAN.md` §5/§7: the agent calls these tools directly, no
+household-semantic wrapper), not an abstracted add/remove-per-item cart.
+
+One `IInstamartClient` instance is scoped to a single Instamart session (one
+bearer token = one account = one household in our model) — there is no
+household_id parameter anywhere here, unlike the pre-MCP prototype.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from app.models import CartEntry, Product
+from app.instamart.types import (
+    Address,
+    Cart,
+    CartItemRequest,
+    CheckoutResult,
+    Order,
+    OrderDetails,
+    PaymentOption,
+    ProductVariation,
+)
 
 
-class InstamartClient(ABC):
-    """Cart-and-catalog operations, mirroring the Instamart MCP tools."""
+class InstamartAuthError(Exception):
+    """The session's bearer token is invalid or expired — re-run OAuth."""
+
+
+class InstamartDomainError(Exception):
+    """Swiggy answered but declined the request (e.g. min-order, not serviceable) —
+    terminal, not retryable; the message is meant to be surfaced to the user."""
+
+
+class InstamartUpstreamError(Exception):
+    """Network/server trouble that persisted after retrying with backoff."""
+
+
+class IInstamartClient(ABC):
+    """Cart-and-catalog operations, mirroring the Instamart MCP tools directly."""
 
     @abstractmethod
-    def search_products(self, query: str) -> list[Product]:
-        """Resolve a free-text item (e.g. "milk") to catalog products.
+    def get_addresses(self) -> list[Address]:
+        """Saved delivery addresses. Swiggy mandates STOPping here and letting the
+        user choose before any other tool call — never auto-pick."""
 
-        Returns an empty list when nothing matches. The caller auto-resolves to
-        the first result (brands are not disambiguated in V1).
+    @abstractmethod
+    def search_products(self, address_id: str, query: str) -> list[ProductVariation]:
+        """Resolve free text (e.g. "milk") to variations. Swiggy mandates asking
+        the user which variation before adding to cart unless size/qty was given."""
+
+    @abstractmethod
+    def update_cart(self, address_id: str, items: list[CartItemRequest]) -> Cart:
+        """Full-replace the cart with `items` — there is no incremental add/remove
+        tool. Callers must send the complete desired item set every time."""
+
+    @abstractmethod
+    def get_cart(self) -> Cart:
+        """Current cart state — display + stock/price reconciliation only, never
+        used to decide what *should* be in the cart."""
+
+    @abstractmethod
+    def clear_cart(self) -> None: ...
+
+    @abstractmethod
+    def get_payment_options(self) -> list[PaymentOption]:
+        """Methods `checkout` will accept — verified live as UPI and COD."""
+
+    @abstractmethod
+    def checkout(
+        self, address_id: str, payment_method: str | None = None
+    ) -> CheckoutResult:
+        """Places a real order. Caller must have already confirmed with the user
+        and checked the cart total is < ₹1000."""
+
+    @abstractmethod
+    def get_orders(self) -> list[OrderDetails]:
+        """Newest first, with items, bill and status.
+
+        Note `get_order_details` is deliberately absent: it is documented, but
+        Swiggy gates it to beta accounts and refuses for ours. `get_orders`
+        already returns the same fields.
         """
-
-    @abstractmethod
-    def update_cart(
-        self, household_id: str, product: Product, qty: int, action: str
-    ) -> None:
-        """Apply a change to the household cart. `action` is "add" or "remove"."""
-
-    @abstractmethod
-    def get_cart(self, household_id: str) -> list[CartEntry]:
-        """Return the current cart entries (product + qty) for a household."""
