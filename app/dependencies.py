@@ -8,6 +8,7 @@ webhook body forces it — a small, isolated exception, not a redesign.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from functools import lru_cache
 
@@ -28,6 +29,8 @@ from app.onboarding.service import OnboardingService
 from app.settings import Settings, get_settings
 from app.whatsapp.messenger import IMessenger
 from app.whatsapp.twilio_messenger import TwilioMessenger
+
+logger = logging.getLogger(__name__)
 
 
 @lru_cache
@@ -77,6 +80,10 @@ async def get_verified_twilio_form(
     signature = request.headers.get("X-Twilio-Signature", "")
     validator = RequestValidator(settings.twilio_auth_token)
     if not validator.validate(str(request.url), params, signature):
+        logger.warning(
+            "Rejected webhook request with invalid Twilio signature from %r",
+            params.get("From"),
+        )
         raise HTTPException(status_code=403, detail="Invalid Twilio signature")
     return params
 

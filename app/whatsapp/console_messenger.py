@@ -5,7 +5,11 @@ directly in tests, same pattern as `MockInstamartClient`.
 
 from __future__ import annotations
 
+import logging
+
 from app.whatsapp.messenger import IMessenger
+
+logger = logging.getLogger(__name__)
 
 
 class ConsoleMessenger(IMessenger):
@@ -14,4 +18,4 @@ class ConsoleMessenger(IMessenger):
 
     def send(self, to: str, text: str) -> None:
         self.sent.append((to, text))
-        print(f"[WhatsApp -> {to}] {text}")
+        logger.info("[WhatsApp -> %s] %s", to, text)

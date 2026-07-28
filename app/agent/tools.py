@@ -17,6 +17,8 @@ serviceable" as a result and re-reasons, instead of the graph blowing up.
 
 from __future__ import annotations
 
+import logging
+
 from app.accounts.dao import IAccountDAO
 from app.agent.graph import ToolResult
 from app.agent.state import AgentState
@@ -28,6 +30,8 @@ from app.instamart.client import (
     InstamartDomainError,
     InstamartUpstreamError,
 )
+
+logger = logging.getLogger(__name__)
 
 MAX_VARIANTS_SHOWN = 5
 CHECKOUT_CAP = 1000
@@ -184,6 +188,7 @@ def build_tools(
         try:
             variations = client.search_products(state["address_id"], args["query"])
         except (InstamartDomainError, InstamartUpstreamError, InstamartAuthError) as e:
+            logger.warning("search_products failed for query %r: %s", args["query"], e)
             return ToolResult(content=f"Instamart could not search right now: {e}")
 
         available = [v for v in variations if v.available]
@@ -243,6 +248,12 @@ def build_tools(
                 state["requested_by"],
             )
         except (InstamartDomainError, InstamartUpstreamError, InstamartAuthError) as e:
+            logger.warning(
+                "update_cart failed for spin_id %r in group %r: %s",
+                spin_id,
+                state["group_id"],
+                e,
+            )
             return ToolResult(content=f"Instamart rejected the cart update: {e}")
 
         if added.status == AddStatus.DUPLICATE:
@@ -265,6 +276,7 @@ def build_tools(
         try:
             lines = cart_service.items(state["group_id"])
         except (InstamartDomainError, InstamartUpstreamError, InstamartAuthError) as e:
+            logger.warning("get_cart failed for group %r: %s", state["group_id"], e)
             return ToolResult(content=f"Could not read the cart: {e}")
         if not lines:
             return ToolResult(content="Your cart is currently empty.")
@@ -284,6 +296,7 @@ def build_tools(
         try:
             orders = client.get_orders()
         except (InstamartDomainError, InstamartUpstreamError, InstamartAuthError) as e:
+            logger.warning("check_order failed for group %r: %s", state["group_id"], e)
             return ToolResult(content=f"Could not check the order: {e}")
         if not orders:
             return ToolResult(content="No orders found on this account yet.")
@@ -333,10 +346,15 @@ def build_tools(
         try:
             options = client.get_payment_options()
         except (InstamartDomainError, InstamartUpstreamError, InstamartAuthError) as e:
+            logger.warning(
+                "get_payment_options failed for group %r: %s", state["group_id"], e
+            )
             return ToolResult(content=f"Could not fetch payment options: {e}")
         if not options:
             return ToolResult(content="Instamart offered no payment methods.")
-        listing = "\n".join(f"- {o.label} (pass payment_method={o.id})" for o in options)
+        listing = "\n".join(
+            f"- {o.label} (pass payment_method={o.id})" for o in options
+        )
         return ToolResult(
             content=f"Payment methods available:\n{listing}\n"
             f"Pass exactly one of these ids to checkout, nothing else."
@@ -378,6 +396,7 @@ def build_tools(
 
             result = client.checkout(state["address_id"], args.get("payment_method"))
         except (InstamartDomainError, InstamartUpstreamError, InstamartAuthError) as e:
+            logger.error("checkout failed for group %r: %s", state["group_id"], e)
             return ToolResult(content=f"Checkout failed: {e}")
 
         if result.bridge_url:

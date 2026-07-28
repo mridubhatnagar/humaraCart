@@ -14,6 +14,8 @@ goes to the sender alone.
 
 from __future__ import annotations
 
+import logging
+
 from langchain_core.messages import HumanMessage
 from langgraph.errors import GraphRecursionError
 from langgraph.types import Command
@@ -22,6 +24,8 @@ from app.accounts.dao import IAccountDAO
 from app.cart.service import CartService
 from app.groups.dao import IGroupAccountDAO
 from app.whatsapp.messenger import IMessenger
+
+logger = logging.getLogger(__name__)
 
 RECURSION_LIMIT = 12
 
@@ -67,6 +71,13 @@ class AgentService:
         try:
             result = self._graph.invoke(payload, config)
         except GraphRecursionError:
+            logger.error(
+                "Agent hit the recursion limit (%d) for group %r, sender %r, body %r",
+                RECURSION_LIMIT,
+                group_id,
+                sender,
+                body,
+            )
             self._messenger.send(sender, "I got stuck on that one. Could you rephrase?")
             return
 

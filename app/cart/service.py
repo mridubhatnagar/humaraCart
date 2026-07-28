@@ -16,6 +16,7 @@ unrelated households don't block each other.
 
 from __future__ import annotations
 
+import logging
 import threading
 from dataclasses import dataclass
 from enum import Enum
@@ -24,6 +25,8 @@ from app.cart.dao import IItemCartDAO
 from app.cart.models import ItemCart
 from app.instamart.client import IInstamartClient
 from app.instamart.types import CartItemRequest
+
+logger = logging.getLogger(__name__)
 
 
 class AddStatus(str, Enum):
@@ -96,10 +99,16 @@ class CartService:
             )
             try:
                 self._sync_remote(group_id, address_id)
-            except Exception:
+            except Exception as e:
                 # Local is the source of truth for every future full-replace,
                 # so a row Swiggy rejected must not survive — it would be
                 # re-sent on every subsequent write and keep failing.
+                logger.warning(
+                    "Remote sync failed adding %r to group %r, rolling back local row: %s",
+                    spin_id,
+                    group_id,
+                    e,
+                )
                 self._item_cart_dao.delete(f"{group_id}:{spin_id}")
                 raise
             return AddResult(AddStatus.ADDED)
@@ -116,10 +125,16 @@ class CartService:
                     self._sync_remote(group_id, address_id)
                 else:
                     self._client.clear_cart()
-            except Exception:
+            except Exception as e:
                 # Put it back: the item is still in Swiggy's cart, so dropping
                 # it locally would hide it from the user and from the next
                 # full-replace payload.
+                logger.warning(
+                    "Remote sync failed removing %r from group %r, restoring local row: %s",
+                    spin_id,
+                    group_id,
+                    e,
+                )
                 self._item_cart_dao.create(
                     ItemCart(
                         group_id=group_id,

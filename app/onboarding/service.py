@@ -14,6 +14,7 @@ few seconds between sending the authorize link and the browser's callback.
 
 from __future__ import annotations
 
+import logging
 import urllib.parse
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -36,6 +37,8 @@ from app.invites.jwt_tokens import sign, verify
 from app.invites.models import InviteToken
 from app.settings import Settings
 from app.whatsapp.messenger import IMessenger
+
+logger = logging.getLogger(__name__)
 
 INVITE_EXPIRY = timedelta(hours=24)
 OAUTH_STATE_EXPIRY = timedelta(minutes=10)
@@ -93,6 +96,10 @@ class OnboardingService:
         phone = payload["phone"]
         verifier = self._pending_verifiers.pop(phone, None)
         if verifier is None:
+            logger.warning(
+                "OAuth callback for %r had no pending verifier (expired or replayed state)",
+                phone,
+            )
             return  # expired or replayed state — nothing to complete
 
         access_token = exchange_code_for_token(
@@ -208,12 +215,19 @@ class OnboardingService:
     def _consume_invite(self, sender: str, token: str) -> None:
         try:
             payload = verify(token, self._settings.jwt_secret)
-        except jwt.PyJWTError:
+        except jwt.PyJWTError as e:
+            logger.warning("Invalid or expired invite token from %r: %s", sender, e)
             self._messenger.send(sender, "That invite link is invalid or expired.")
             return
 
         token_id, group_id = payload["token_id"], payload["group_id"]
         if self._invite_token_dao.is_consumed(token_id):
+            logger.warning(
+                "Invite token %r replayed by %r for group %r",
+                token_id,
+                sender,
+                group_id,
+            )
             self._messenger.send(
                 sender, "That invite link has already been used. Ask for a fresh one."
             )

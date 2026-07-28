@@ -13,10 +13,13 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import secrets
 import urllib.error
 import urllib.parse
 import urllib.request
+
+logger = logging.getLogger(__name__)
 
 BASE = "https://mcp.swiggy.com"
 SCOPE = "mcp:tools"
@@ -76,5 +79,6 @@ def exchange_code_for_token(code: str, verifier: str, redirect_uri: str) -> str:
         raw = e.read().decode()
     tok = json.loads(raw)
     if "access_token" not in tok:
+        logger.error("Instamart OAuth token exchange failed: %s", tok)
         raise RuntimeError(f"Instamart token exchange failed: {tok}")
     return tok["access_token"]

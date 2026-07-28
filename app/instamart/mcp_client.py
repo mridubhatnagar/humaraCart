@@ -14,6 +14,7 @@ jitter (500ms -> 8s cap, max 5 retries) before raising `InstamartUpstreamError`.
 from __future__ import annotations
 
 import json
+import logging
 import random
 import secrets
 import time
@@ -37,6 +38,8 @@ from app.instamart.types import (
     PaymentOption,
     ProductVariation,
 )
+
+logger = logging.getLogger(__name__)
 
 MCP_URL = "https://mcp.swiggy.com/im"
 PROTOCOL_VERSION = "2025-06-18"
@@ -70,7 +73,17 @@ def _post_with_retry(url: str, body: dict, headers: dict) -> tuple[int, dict, st
             last_status, last_headers, last_raw = 0, {}, str(e)
         if attempt < _MAX_RETRIES:
             delay = min(_BASE_DELAY_S * (2**attempt), _MAX_DELAY_S)
+            logger.warning(
+                "Instamart MCP call failed (attempt %d/%d, status=%s) — retrying in %.1fs",
+                attempt + 1,
+                _MAX_RETRIES,
+                last_status or "unreachable",
+                delay,
+            )
             time.sleep(delay + random.uniform(0, delay * 0.1))
+    logger.error(
+        "Instamart MCP unreachable after %d retries: %s", _MAX_RETRIES, last_raw
+    )
     raise InstamartUpstreamError(
         f"Instamart MCP unreachable after {_MAX_RETRIES} retries: {last_raw}"
     )
@@ -88,10 +101,14 @@ def _parse_envelope(content_type: str, raw: str) -> dict:
                         return obj
                 except json.JSONDecodeError:
                     continue
+        logger.warning(
+            "No parseable data: line in Instamart SSE response: %r", raw[:500]
+        )
         return {}
     try:
         return json.loads(raw) if raw.strip() else {}
     except json.JSONDecodeError:
+        logger.warning("Instamart response body is not valid JSON: %r", raw[:500])
         return {}
 
 
@@ -99,6 +116,7 @@ def _error_text(result: dict) -> str:
     try:
         return result["content"][0]["text"]
     except (KeyError, IndexError, TypeError):
+        logger.warning("Instamart error result had an unexpected shape: %r", result)
         return "Instamart declined the request"
 
 
@@ -110,6 +128,7 @@ def _extract_data(result: dict) -> dict:
         text = result["content"][0]["text"]
         return json.loads(text)
     except (KeyError, IndexError, TypeError, json.JSONDecodeError):
+        logger.warning("Instamart success result had an unexpected shape: %r", result)
         return {}
 
 
@@ -331,13 +350,16 @@ class McpInstamartClient(IInstamartClient):
             # Swiggy signals refusals this way (e.g. get_order_details is
             # beta-gated). Without this the caller gets an empty dict and no
             # idea anything went wrong.
-            raise InstamartDomainError(_error_text(result))
+            message = _error_text(result)
+            logger.warning("Instamart tool %r refused: %s", name, message)
+            raise InstamartDomainError(message)
         data = _extract_data(result)
         if data.get("success") is False:
             message = (data.get("error") or {}).get(
                 "message", "Instamart request failed"
             )
             self.last_message = message
+            logger.warning("Instamart tool %r failed: %s", name, message)
             raise InstamartDomainError(message)
         self.last_message = data.get("message")
         return data.get("data", data)
@@ -360,6 +382,9 @@ class McpInstamartClient(IInstamartClient):
 
         status, resp_headers, raw = _post_with_retry(MCP_URL, body, headers)
         if status == 401:
+            logger.warning(
+                "Instamart returned 401 for method %r — token likely expired", method
+            )
             raise InstamartAuthError(
                 "Instamart session expired or invalid — re-authenticate"
             )
@@ -380,6 +405,15 @@ class McpInstamartClient(IInstamartClient):
             code = parsed["error"].get("code")
             message = parsed["error"].get("message", "Instamart MCP error")
             if code == -32001:
+                logger.warning(
+                    "Instamart JSON-RPC auth error for method %r: %s", method, message
+                )
                 raise InstamartAuthError(message)
+            logger.warning(
+                "Instamart JSON-RPC error for method %r (code=%s): %s",
+                method,
+                code,
+                message,
+            )
             raise InstamartDomainError(message)
         return parsed.get("result", {})

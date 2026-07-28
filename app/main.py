@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -9,6 +10,8 @@ from fastapi import FastAPI
 from app.core.db import create_all, make_engine
 from app.routers import oauth, webhook
 from app.settings import get_settings
+
+logging.basicConfig(level=logging.INFO)
 
 
 @asynccontextmanager
