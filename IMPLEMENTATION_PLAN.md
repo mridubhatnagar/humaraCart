@@ -294,7 +294,8 @@ Each needs the agent to **observe a tool result and re-reason** (hence the loop)
 
 | Scenario | Signal | Agent response |
 |---|---|---|
-| Out of stock | `isInStockAndAvailable: false` | don't add; tell user / offer an in-stock alternative |
+| Out of stock (at add time) | `isInStockAndAvailable: false` | don't add; tell user / offer an in-stock alternative |
+| Out of stock (discovered at checkout) | re-checked at `ready to order` / `checkout` | flag out-of-stock items before showing the order summary — a cart can sit for days, so stock is checked again, not just trusted from add-time |
 | Not serviceable at the address | no serviceable result / `ADDRESS_NOT_SERVICEABLE` | explain it can't be delivered here |
 | No match | `search_products` returns nothing | say so; ask for a different term |
 | Ambiguous / multiple variants | many results, no size given | **ask which variant** (Swiggy-mandated) |
@@ -329,6 +330,94 @@ agentic core, and the real MCP calls show in the tool-call log.
   (`From` → member), so the sender *is* the "who."
 - **Trade-off accepted:** more agentic than wrapping; the deterministic layer still keeps
   the money-shot (dedup + "added by Priya") reliable without the agent owning correctness.
+
+### M5 build decisions (settled in discussion — do not re-litigate)
+
+1. **Human-in-the-loop = `interrupt`, never the prompt.** Anywhere the flow must stop and
+   wait for a person, it stops via LangGraph `interrupt` — a runtime halt the model cannot
+   skip — *not* by instructing the model to ask a question. Structural, not behavioural.
+   This supersedes the "ask which variant" bullet above being a prompt-only rule.
+   - **Exactly two interrupt points inside the graph: variant pick, and payment-mode /
+     checkout confirm.**
+   - **Address selection stays OUTSIDE the graph** — already built deterministically in M4's
+     `OnboardingService` (holder links Instamart → `get_addresses` → replies with a number →
+     `Group.address_id`). One-time setup; the address never changes afterwards, so the agent
+     would never need to ask. Not worth dragging into the graph for uniformity.
+   - **Quantity gets no interrupt.** "add milk" defaults to 1, "add 2 milk" is already
+     explicit; no realistic demo phrasing needs the stop, and each extra interrupt is another
+     beat in the recording.
+   - **The interrupt lives in its own node, never in the `tools` node.** `interrupt()` must be
+     called inside a node (edges are pure routing and cannot pause), and on resume **the whole
+     node re-executes from the top** — so anything above the `interrupt()` call runs twice.
+     Keeping the ask in a dedicated do-nothing node means resuming never re-issues the Swiggy
+     search that produced the options, and never re-runs a checkout. The **conditional edge**
+     decides whether we need to ask; the **node** does the asking.
+
+   **Graph shape — 3 nodes:**
+
+   ```
+                             START
+                               │
+                               ▼
+           ┌───────────────► agent ───────────────► END
+           │                 │   │                (no tool call — just a reply)
+           │      tool call  │   │  checkout — confirm first
+           │                 ▼   │
+           │              tools  │
+           │              │   │  │
+           │       done   │   │  │  result needs a choice
+           └──────────────┘   ▼  ▼
+                           ask_human      ← interrupt() lives here
+                               │
+                               └──────────► (back to agent)
+   ```
+
+   | From | Condition | To |
+   |---|---|---|
+   | `START` | always | `agent` |
+   | `agent` | no tool call | `END` |
+   | `agent` | tool call, no confirmation needed | `tools` |
+   | `agent` | tool call is `checkout`, not yet confirmed | `ask_human` |
+   | `tools` | result needs a human choice (multiple variants) | `ask_human` |
+   | `tools` | otherwise | `agent` |
+   | `ask_human` | after resume | `agent` |
+
+   **Asymmetry to remember:** variants are asked *after* the tool runs (search produced the
+   options); checkout is asked *before* (you can't confirm an order by placing it first).
+
+   **Loop hazard:** because `ask_human` always returns to `agent`, the LLM re-issues the
+   `checkout` call after confirmation — so state must carry a "already confirmed" flag, or the
+   edge routes back to `ask_human` forever.
+2. **`update_cart` keeps Swiggy's name; the model passes only the one item.** The guard
+   composes the full-replace payload. A full item list must never be composed by the model —
+   one omission silently deletes a flatmate's groceries. (Resolves the contradiction between
+   "no wrapper tools like `add_item`" here and "guard builds the payload + the agent's delta"
+   in §6: the *name* stays Swiggy's, the *payload* stays the guard's.)
+3. **Payload base is always local `ItemCart`, never `get_cart`.** Swiggy's cart is
+   per-address (verified live), `clear_cart` rotates the cartId (verified), and expiry is not
+   distinguishable (`CART_EXPIRED` is planned but not emitted). Any of these returns an empty
+   cart while the household still has items — basing a full-replace on that wipes the list.
+   `get_cart` is for **display and stock/price reconciliation only**.
+4. **Injected parameters are invisible to the model.** `address_id`, `group_id` and
+   `requested_by` come from graph state, never from tool arguments — so the model sees
+   `search_products(query)`, not `search_products(address_id, query)`, and cannot write into
+   another household's cart.
+5. **One thread per household** (`thread_id = group_id`), so flatmates share one conversation
+   history. Inbound messages are therefore **speaker-labelled** ("Priya: add milk") — without
+   it the agent blurs who asked for what and attribution in replies goes to the wrong person.
+6. **Reply vs broadcast.** Cart actually changed → **deterministic** message, identical to
+   everyone including the sender (agent does not compose it). No cart change (duplicate,
+   variant question, error, "show list") → agent prose, **sender only**. Matches the demo
+   script, and keeps broadcast fully out of the LLM's hands.
+7. **Runaway loops** are bounded by an explicit `recursion_limit` on invoke; `GraphRecursionError`
+   is caught and answered with a graceful "I got stuck, try rephrasing".
+8. **`interrupt` requires a checkpointer.** `MemorySaver` loses paused conversations on
+   restart, which is bad mid-recording — so a SQLite checkpointer package must be added
+   (not currently installed) and pointed at the DB file we already mount.
+9. **Scope discipline: this is a recorded MVP demo.** Retakes are free. Do not build for
+   failure modes the demo will never hit.
+10. **LangSmith** — decision deliberately deferred to the *end* of M5, when prompt iteration
+    is what's actually happening.
 
 ---
 
