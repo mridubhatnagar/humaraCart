@@ -3,8 +3,11 @@
 WhatsApp delivers one message at a time with no notion of a conversation being
 mid-flight. LangGraph can sit paused at an `interrupt` indefinitely. So every
 inbound message has to answer one question first: is this a new request, or the
-answer to something we already asked? That's what `_is_paused` decides, by
-checking whether the household's thread has a task waiting on an interrupt.
+answer to something we already asked? That's what `_pending_for` decides, by
+checking whether the household's thread has a task waiting on an interrupt —
+and, since a pause is a question addressed to one specific person, whether this
+sender is the one it was asked to. A different household member's message while
+someone else's question is outstanding is never treated as that answer.
 
 Reply routing follows the locked decision: if the cart actually changed, the
 whole household gets one identical deterministic message and the model's prose
@@ -51,7 +54,16 @@ class AgentService:
             "recursion_limit": RECURSION_LIMIT,
         }
 
-        if self._is_paused(config):
+        pending_for = self._pending_for(config)
+        if pending_for is not None and pending_for != sender:
+            self._messenger.send(
+                sender,
+                f"Waiting on a reply from {self._name_for(pending_for)} first — "
+                "try again once they've answered.",
+            )
+            return
+
+        if pending_for is not None:
             payload = Command(resume=body)
         else:
             payload = {
@@ -120,9 +132,13 @@ class AgentService:
         ]
         self._messenger.broadcast(recipients, text)
 
-    def _is_paused(self, config: dict) -> bool:
+    def _pending_for(self, config: dict) -> str | None:
+        """Who a paused thread's outstanding question was addressed to, or
+        None if the thread isn't paused."""
         snapshot = self._graph.get_state(config)
-        return any(task.interrupts for task in snapshot.tasks)
+        if any(task.interrupts for task in snapshot.tasks):
+            return snapshot.values.get("requested_by")
+        return None
 
     def _render_question(self, payload: dict) -> str:
         if payload.get("kind") == "choose_variant":

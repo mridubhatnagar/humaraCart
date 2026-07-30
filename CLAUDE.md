@@ -155,6 +155,9 @@ These are the conventions to follow for all code in this repo.
   `# ----- routes -----`. They are visual noise, not information. Use a plain
   one-line comment only when it explains *why* something non-obvious is done; let
   clear names and function/class boundaries do all the sectioning.
+- **No `Co-Authored-By` / `Claude-Session` trailers on commits.** Do not append
+  the default Claude Code attribution lines to commit messages in this repo —
+  commit as the configured git author only.
 - **Adhere to Swiggy's MCP agent guidance** (verbatim + links in `REFERENCE.md`);
   follow the instructions Swiggy injects in tool-response `message` fields, and use
   those messages as-is (their branding). **Consult the authoritative docs** when

@@ -35,9 +35,10 @@ class FakeInterrupt:
 class FakeGraph:
     """Returns a canned result; records what it was invoked with."""
 
-    def __init__(self, result, paused=False):
+    def __init__(self, result, paused=False, pending_for=None):
         self._result = result
         self._paused = paused
+        self._pending_for = pending_for
         self.invoked_with = []
 
     def invoke(self, payload, config):
@@ -50,6 +51,7 @@ class FakeGraph:
 
         class Snapshot:
             tasks = (Task(),)
+            values = {"requested_by": self._pending_for}
 
         return Snapshot()
 
@@ -181,7 +183,9 @@ def test_messages_are_speaker_labelled(wiring):
 
 def test_a_paused_thread_resumes_instead_of_starting_over(wiring):
     graph = FakeGraph(
-        {"messages": [AIMessage(content="done")], "cart_changed": False}, paused=True
+        {"messages": [AIMessage(content="done")], "cart_changed": False},
+        paused=True,
+        pending_for=PRIYA,
     )
     service, _, _ = build(wiring, graph)
 
@@ -189,4 +193,17 @@ def test_a_paused_thread_resumes_instead_of_starting_over(wiring):
 
     payload = graph.invoked_with[0]
     assert not isinstance(payload, dict)  # a Command(resume=...), not fresh state
-    assert payload.resume == "2"
+
+
+def test_a_different_senders_message_does_not_answer_someone_elses_question(wiring):
+    graph = FakeGraph(
+        {"messages": [AIMessage(content="done")], "cart_changed": False},
+        paused=True,
+        pending_for=PRIYA,
+    )
+    service, messenger, _ = build(wiring, graph)
+
+    service.handle(RAHUL, "2", GROUP_ID, ADDR)
+
+    assert graph.invoked_with == []
+    assert "Priya" in messenger.sent[0][1]

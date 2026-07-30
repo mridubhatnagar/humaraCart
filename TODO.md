@@ -66,9 +66,9 @@ as they land. Both external deps (MCP + WhatsApp) are already de-risked — see
 - [ ] **Tune the system prompt** — `app/agent/prompt.py` is still the first draft
 - [ ] Expand the "world says no" scenario list (§7) into prompt coverage: out-of-stock, not-serviceable, no-match, min-order, cart ≥ ₹1000, address-not-saved → V2
 
-### Known gaps found during live testing (not yet fixed)
+### Known gaps found during live testing
 
-- [ ] **`ProfileName` is never captured**, so `Account.name` stays `NULL` for anyone who joins by invite — `DB_DESIGN.md` §1 says it should be read from the first inbound message. Attribution then falls back to the phone number, so the money shot reads *"added by +9198…"* instead of a name. **Visible on camera.**
+- [x] **`ProfileName` is never captured** — fixed: `webhook.py` passes Twilio's `ProfileName` through to `ConversationService.handle`, which fills in `Account.name` on first message if not already set (existing names are never overwritten).
 - [ ] **Holder gets no notification when someone joins** via invite — only the joiner is greeted, so the invite appears to do nothing from the holder's side.
 - [ ] **`broadcast` has no error isolation** — it's a plain loop over `send`, so one unreachable recipient (not joined to the sandbox) silently kills delivery for everyone after them in the list.
 - [ ] **`to_pay` renders as `102.0`** rather than `102` — cosmetic float artefact in user-facing text.
@@ -92,12 +92,20 @@ as they land. Both external deps (MCP + WhatsApp) are already de-risked — see
 ## Step 6 — Recording instrumentation
 
 - [ ] Tool-call logging for the "under the hood" terminal shot
+- [ ] Local CLI piping typed input through `ConversationService` (`ConsoleMessenger` already exists) — needed to rehearse without spending Twilio sandbox messages
 
 ## Step 7 — Dry run
 
+- [ ] **Twilio sandbox caps outbound at 50 msgs/day** — decide: upgrade the account, or accept ~1 clean take/day and rehearse everything locally first
+- [ ] **Duplicate-catch never tested live** — the money shot; highest risk on this list given the one-take budget
+- [x] **`remove` tested live** — via the local CLI (`scripts/local_cli.py`), real Swiggy account: works correctly
+- [ ] Tune the system prompt against a full rehearsal run (still first draft — §4 above)
+- [ ] Invite-flow screenshots (redact phone numbers/address) + Google Slides deck for the parts not shown live
 - [ ] Run the locked demo script (§11) end to end on both phones
-- [ ] Pre-flight checklist: OAuth token fresh (<5 days), both phones joined to sandbox, `get_addresses` returns a valid `addressId`
-- [ ] scrcpy side-by-side + screen recording setup
+- [ ] Pre-flight checklist: OAuth token fresh (<5 days, reseed via `scripts/seed_household.py` if not), both phones joined to sandbox, `get_addresses` returns a valid `addressId`
+- [ ] **From now until the recording is done: no non-bot touches to the real Swiggy account** — no re-running `verify_swiggy.py`/`verify_mcp_client.py`, no opening the real Swiggy app on this address, no re-seeding unless the token is actually stale. Every cart-mismatch surprise today traced back to one of these silently overwriting the live cart behind the bot's local state.
+- [ ] **Immediately before hitting record** (not hours before): clear local `ItemCart` rows for the demo group, confirm the live cart is genuinely empty (`get_cart` → `items: []`, `cartAbsent: true`), then run `show cart` once as a final smoke test — real names/prices means clean; raw codes means something touched the cart and needs re-clearing before recording starts
+- [ ] Screen-record each phone individually (AirDroid/GNOME recorder) rather than mirroring both live — no mocked WhatsApp UI
 
 ---
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -51,7 +53,9 @@ def build(wiring, onboarding_handled: bool):
 
 
 def test_help_is_answered_without_the_agent_or_onboarding(wiring):
-    service, onboarding, assembler, messenger, _ = build(wiring, onboarding_handled=False)
+    service, onboarding, assembler, messenger, _ = build(
+        wiring, onboarding_handled=False
+    )
 
     service.handle(PRIYA, "help")
 
@@ -135,3 +139,57 @@ def test_no_profile_name_changes_nothing(wiring):
     service.handle(PRIYA, "hi")
 
     assert account_dao.get_by_phone(PRIYA).name == "Priya"
+
+
+def test_concurrent_messages_do_not_overlap_in_the_agent():
+    """Background tasks run on a thread pool: two inbound messages could
+    otherwise reach the agent at the same instant and race on its shared
+    LangGraph checkpoint (observed live as a dangling tool_call OpenAI 400).
+    The lock must serialize them.
+
+    DAOs are mocked here rather than DB-backed (unlike the other tests in
+    this file): the in-memory SQLite `session` fixture isn't safe to hit from
+    two real threads at once, and that's not what this test is about."""
+    group_account_dao = MagicMock()
+    group_account_dao.get_by_account.return_value = [
+        GroupAccount(group_id=GROUP_ID, account_id=PRIYA, role=Role.HOLDER)
+    ]
+    group_dao = MagicMock()
+    group_dao.get_by_id.return_value = Group(group_id=GROUP_ID, address_id=ADDR)
+    onboarding = MagicMock()
+    onboarding.handle_message.return_value = False
+    assembler = MagicMock()
+    service = ConversationService(
+        onboarding=onboarding,
+        agent_assembler=assembler,
+        group_dao=group_dao,
+        group_account_dao=group_account_dao,
+        messenger=ConsoleMessenger(),
+        account_dao=MagicMock(),
+    )
+
+    events: list[tuple[str, str]] = []
+    events_guard = threading.Lock()
+
+    def slow_handle(sender, body, group_id, address_id):
+        with events_guard:
+            events.append(("start", body))
+        time.sleep(0.05)
+        with events_guard:
+            events.append(("end", body))
+
+    assembler.for_group.return_value.handle.side_effect = slow_handle
+
+    t1 = threading.Thread(target=service.handle, args=(PRIYA, "add milk"))
+    t2 = threading.Thread(target=service.handle, args=(PRIYA, "add bread"))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    assert len(events) == 4
+    first_body = events[0][1]
+    assert events[1] == (
+        "end",
+        first_body,
+    ), "second message started before the first finished"

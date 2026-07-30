@@ -9,6 +9,8 @@ know the other exists, and the router stays thin.
 
 from __future__ import annotations
 
+import threading
+
 from app.accounts.dao import IAccountDAO
 from app.groups.dao import IGroupAccountDAO, IGroupDAO
 from app.onboarding.service import OnboardingService
@@ -48,6 +50,11 @@ class ConversationService:
         self._group_dao = group_dao
         self._group_account_dao = group_account_dao
         self._messenger = messenger
+        # Background tasks run on a thread pool: two inbound messages can
+        # reach the agent at the same moment and race on its shared LangGraph
+        # checkpoint. One process-wide lock serializes agent turns so that
+        # never happens — cheap at this scale (one household, one process).
+        self._agent_lock = threading.Lock()
 
     def handle(self, sender: str, body: str, profile_name: str | None = None) -> None:
         if profile_name:
@@ -83,7 +90,8 @@ class ConversationService:
             )
             return
 
-        agent.handle(sender, body, group.group_id, group.address_id)
+        with self._agent_lock:
+            agent.handle(sender, body, group.group_id, group.address_id)
 
     def _remember_name(self, phone: str, profile_name: str) -> None:
         """Fill in a name we do not have yet.
