@@ -8,16 +8,18 @@ every `update_cart` call is a correct full-replace built from the local
 `ItemCart` set (DB_DESIGN.md) — never a hand-crafted delta, so a silently
 expired Swiggy cart self-heals on the next write.
 
-Per-group locking serializes the read-modify-write: SQLite alone doesn't cover
-this, since the network call to Swiggy sits between the local read and the
-local write completing. One lock per group_id, not a single global lock, so
-unrelated households don't block each other.
+The read-modify-write here needs serializing per group: the network call to
+Swiggy sits between the local read and the local write completing, and a DB
+transaction alone can't cover that gap. `add`/`remove` are only ever reached
+via the agent's tools (`app/agent/tools.py`), which only run inside
+`ConversationService`'s per-group turn lock (`app/core/locks.py`) — so that
+lock already excludes concurrent calls for the same group_id here; this
+class doesn't need one of its own.
 """
 
 from __future__ import annotations
 
 import logging
-import threading
 from dataclasses import dataclass
 from enum import Enum
 
@@ -71,8 +73,6 @@ class CartService:
     def __init__(self, client: IInstamartClient, item_cart_dao: IItemCartDAO) -> None:
         self._client = client
         self._item_cart_dao = item_cart_dao
-        self._locks: dict[str, threading.Lock] = {}
-        self._locks_guard = threading.Lock()
 
     def add(
         self,
@@ -82,69 +82,67 @@ class CartService:
         quantity: int,
         requested_by: str,
     ) -> AddResult:
-        with self._lock_for(group_id):
-            existing = self._item_cart_dao.get_by_group_and_item(group_id, spin_id)
-            if existing is not None:
-                return AddResult(
-                    AddStatus.DUPLICATE, existing_requested_by=existing.requested_by
-                )
+        existing = self._item_cart_dao.get_by_group_and_item(group_id, spin_id)
+        if existing is not None:
+            return AddResult(
+                AddStatus.DUPLICATE, existing_requested_by=existing.requested_by
+            )
 
+        self._item_cart_dao.create(
+            ItemCart(
+                group_id=group_id,
+                swiggy_item_id=spin_id,
+                quantity=quantity,
+                requested_by=requested_by,
+            )
+        )
+        try:
+            self._sync_remote(group_id, address_id)
+        except Exception as e:
+            # Local is the source of truth for every future full-replace,
+            # so a row Swiggy rejected must not survive — it would be
+            # re-sent on every subsequent write and keep failing.
+            logger.warning(
+                "Remote sync failed adding %r to group %r, rolling back local row: %s",
+                spin_id,
+                group_id,
+                e,
+            )
+            self._item_cart_dao.delete(f"{group_id}:{spin_id}")
+            raise
+        return AddResult(AddStatus.ADDED)
+
+    def remove(self, group_id: str, address_id: str, spin_id: str) -> RemoveResult:
+        existing = self._item_cart_dao.get_by_group_and_item(group_id, spin_id)
+        if existing is None:
+            return RemoveResult(RemoveStatus.NOT_IN_CART)
+
+        self._item_cart_dao.delete(f"{group_id}:{spin_id}")
+        try:
+            if self._item_cart_dao.get_by_group(group_id):
+                self._sync_remote(group_id, address_id)
+            else:
+                self._client.clear_cart()
+        except Exception as e:
+            # Put it back: the item is still in Swiggy's cart, so dropping
+            # it locally would hide it from the user and from the next
+            # full-replace payload.
+            logger.warning(
+                "Remote sync failed removing %r from group %r, restoring local row: %s",
+                spin_id,
+                group_id,
+                e,
+            )
             self._item_cart_dao.create(
                 ItemCart(
                     group_id=group_id,
                     swiggy_item_id=spin_id,
-                    quantity=quantity,
-                    requested_by=requested_by,
+                    quantity=existing.quantity,
+                    requested_by=existing.requested_by,
                 )
             )
-            try:
-                self._sync_remote(group_id, address_id)
-            except Exception as e:
-                # Local is the source of truth for every future full-replace,
-                # so a row Swiggy rejected must not survive — it would be
-                # re-sent on every subsequent write and keep failing.
-                logger.warning(
-                    "Remote sync failed adding %r to group %r, rolling back local row: %s",
-                    spin_id,
-                    group_id,
-                    e,
-                )
-                self._item_cart_dao.delete(f"{group_id}:{spin_id}")
-                raise
-            return AddResult(AddStatus.ADDED)
-
-    def remove(self, group_id: str, address_id: str, spin_id: str) -> RemoveResult:
-        with self._lock_for(group_id):
-            existing = self._item_cart_dao.get_by_group_and_item(group_id, spin_id)
-            if existing is None:
-                return RemoveResult(RemoveStatus.NOT_IN_CART)
-
-            self._item_cart_dao.delete(f"{group_id}:{spin_id}")
-            try:
-                if self._item_cart_dao.get_by_group(group_id):
-                    self._sync_remote(group_id, address_id)
-                else:
-                    self._client.clear_cart()
-            except Exception as e:
-                # Put it back: the item is still in Swiggy's cart, so dropping
-                # it locally would hide it from the user and from the next
-                # full-replace payload.
-                logger.warning(
-                    "Remote sync failed removing %r from group %r, restoring local row: %s",
-                    spin_id,
-                    group_id,
-                    e,
-                )
-                self._item_cart_dao.create(
-                    ItemCart(
-                        group_id=group_id,
-                        swiggy_item_id=spin_id,
-                        quantity=existing.quantity,
-                        requested_by=existing.requested_by,
-                    )
-                )
-                raise
-            return RemoveResult(RemoveStatus.REMOVED)
+            raise
+        return RemoveResult(RemoveStatus.REMOVED)
 
     def items(self, group_id: str) -> list[CartLine]:
         local_items = self._item_cart_dao.get_by_group(group_id)
@@ -179,7 +177,3 @@ class CartService:
             for i in local_items
         ]
         self._client.update_cart(address_id, payload)
-
-    def _lock_for(self, group_id: str) -> threading.Lock:
-        with self._locks_guard:
-            return self._locks.setdefault(group_id, threading.Lock())

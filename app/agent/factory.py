@@ -1,16 +1,16 @@
 """Assembles the real agent: OpenAI model, tool schemas, graph, checkpointer.
 
 Kept apart from `build_graph` so the graph itself stays free of any OpenAI or
-SQLite specifics — tests build the same graph with a scripted model and an
+Postgres specifics — tests build the same graph with a scripted model and an
 in-memory checkpointer.
 """
 
 from __future__ import annotations
 
-import sqlite3
-
 from langchain_openai import ChatOpenAI
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.postgres import PostgresSaver
+from psycopg import Connection
+from psycopg.rows import dict_row
 
 from app.accounts.dao import IAccountDAO
 from app.agent.graph import build_graph
@@ -23,12 +23,16 @@ from app.instamart.mcp_client import McpInstamartClient
 from app.settings import Settings
 
 
-def make_checkpointer(database_url: str) -> SqliteSaver:
+def make_checkpointer(database_url: str) -> PostgresSaver:
     """A durable checkpointer, so a restart mid-recording doesn't lose a
     conversation that's paused waiting on someone to pick a variant."""
-    path = database_url.replace("sqlite:///", "", 1)
-    connection = sqlite3.connect(path, check_same_thread=False)
-    return SqliteSaver(connection)
+    conninfo = database_url.replace("postgresql+psycopg://", "postgresql://", 1)
+    connection = Connection.connect(
+        conninfo, autocommit=True, prepare_threshold=0, row_factory=dict_row
+    )
+    checkpointer = PostgresSaver(connection)
+    checkpointer.setup()
+    return checkpointer
 
 
 def build_agent(
@@ -49,9 +53,7 @@ def build_agent(
         temperature=0,
     ).bind_tools(schemas_for(is_holder))
     tools = build_tools(client, cart_service, account_dao, group_account_dao)
-    return build_graph(
-        model, tools, checkpointer, system_prompt=prompt_for(is_holder)
-    )
+    return build_graph(model, tools, checkpointer, system_prompt=prompt_for(is_holder))
 
 
 class AgentAssembler:

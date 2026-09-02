@@ -1,4 +1,17 @@
 services:
+  postgres:
+    image: postgres:16
+    env_file:
+      - path: .env.local
+        required: false
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   app:
     build: .
     ports:
@@ -6,11 +19,11 @@ services:
     env_file:
       - path: .env.local
         required: false
-    environment:
-      DATABASE_URL: "sqlite:////app/data/humaracart.db"
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
       - .:/app
-      - ./data:/app/data
 
   test:
     build: .
@@ -22,3 +35,6 @@ services:
       DATABASE_URL: "sqlite:///:memory:"
     volumes:
       - .:/app
+
+volumes:
+  pgdata:
