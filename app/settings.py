@@ -21,6 +21,9 @@ class Settings(BaseSettings):
 
     jwt_secret: str
     oauth_redirect_uri: str
+    # Base URL Twilio can reach this app at, e.g. https://humaracart.mridulabs.dev.
+    # Optional — empty means no status_callback is set on outbound messages.
+    public_base_url: str = ""
 
     openai_api_key: str
     openai_model: str

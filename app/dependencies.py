@@ -94,10 +94,16 @@ def get_group_lock() -> IGroupLock:
 
 
 def get_messenger(settings: Settings = Depends(get_settings)) -> IMessenger:
+    status_callback_url = (
+        f"{settings.public_base_url}/webhook/status"
+        if settings.public_base_url
+        else None
+    )
     return TwilioMessenger(
         settings.twilio_account_sid,
         settings.twilio_auth_token,
         settings.twilio_whatsapp_from,
+        status_callback_url=status_callback_url,
     )
 
 
