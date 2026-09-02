@@ -29,7 +29,8 @@ def test_webhook_dispatches_to_conversation_service():
         app.dependency_overrides.clear()
 
     assert response.status_code == 200
-    assert response.json() == {"status": "received"}
+    assert response.headers["content-type"].startswith("application/xml")
+    assert response.text == "<Response></Response>"
     fake_conversation.handle.assert_called_once_with("+919812345678", "hi", None)
 
 
