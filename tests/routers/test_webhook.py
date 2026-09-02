@@ -55,3 +55,40 @@ def test_real_form_parsing_and_signature_check_run():
 
     assert response.status_code == 403
     fake_conversation.handle.assert_not_called()
+
+
+def test_status_callback_logs_failure(caplog):
+    app.dependency_overrides[get_verified_twilio_form] = lambda: {
+        "MessageSid": "SM123",
+        "MessageStatus": "failed",
+        "To": "whatsapp:+919812345678",
+        "ErrorCode": "63016",
+        "ErrorMessage": "No active session",
+    }
+    try:
+        with TestClient(app) as client, caplog.at_level("WARNING"):
+            response = client.post("/webhook/status", data={"MessageStatus": "failed"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert "63016" in caplog.text
+    assert "failed" in caplog.text
+
+
+def test_status_callback_logs_success_quietly(caplog):
+    app.dependency_overrides[get_verified_twilio_form] = lambda: {
+        "MessageSid": "SM123",
+        "MessageStatus": "delivered",
+        "To": "whatsapp:+919812345678",
+    }
+    try:
+        with TestClient(app) as client, caplog.at_level("WARNING"):
+            response = client.post(
+                "/webhook/status", data={"MessageStatus": "delivered"}
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert caplog.text == ""
