@@ -4,3 +4,4 @@ __pycache__/
 .env.local
 .env.prod
 data/
+docker-compose.override.yml
