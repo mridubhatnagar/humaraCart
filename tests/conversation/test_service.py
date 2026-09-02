@@ -11,6 +11,7 @@ import pytest
 from app.accounts.dao import AccountDAO
 from app.accounts.models import Account
 from app.conversation.service import ConversationService
+from app.core.locks import InMemoryGroupLock
 from app.groups.dao import GroupAccountDAO, GroupDAO
 from app.groups.models import Group, GroupAccount, Role
 from app.whatsapp.console_messenger import ConsoleMessenger
@@ -48,6 +49,7 @@ def build(wiring, onboarding_handled: bool):
         group_account_dao=group_account_dao,
         messenger=messenger,
         account_dao=account_dao,
+        group_lock=InMemoryGroupLock(),
     )
     return service, onboarding, assembler, messenger, account_dao
 
@@ -166,6 +168,7 @@ def test_concurrent_messages_do_not_overlap_in_the_agent():
         group_account_dao=group_account_dao,
         messenger=ConsoleMessenger(),
         account_dao=MagicMock(),
+        group_lock=InMemoryGroupLock(),
     )
 
     events: list[tuple[str, str]] = []

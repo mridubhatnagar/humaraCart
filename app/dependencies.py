@@ -22,6 +22,7 @@ from app.agent.factory import AgentAssembler, make_checkpointer
 from app.cart.dao import IItemCartDAO, ItemCartDAO
 from app.conversation.service import ConversationService
 from app.core.db import make_session_factory
+from app.core.locks import IGroupLock, PostgresGroupLock
 from app.groups.dao import GroupAccountDAO, GroupDAO, IGroupAccountDAO, IGroupDAO
 from app.instamart.mcp_client import McpInstamartClient
 from app.invites.dao import IInviteTokenDAO, InviteTokenDAO
@@ -86,6 +87,10 @@ async def get_verified_twilio_form(
         )
         raise HTTPException(status_code=403, detail="Invalid Twilio signature")
     return params
+
+
+def get_group_lock() -> IGroupLock:
+    return PostgresGroupLock(_session_factory())
 
 
 def get_messenger(settings: Settings = Depends(get_settings)) -> IMessenger:
@@ -156,6 +161,7 @@ def get_conversation_service(
     group_dao: IGroupDAO = Depends(get_group_dao),
     group_account_dao: IGroupAccountDAO = Depends(get_group_account_dao),
     messenger: IMessenger = Depends(get_messenger),
+    group_lock: IGroupLock = Depends(get_group_lock),
 ) -> ConversationService:
     return ConversationService(
         onboarding=onboarding,
@@ -164,4 +170,5 @@ def get_conversation_service(
         group_account_dao=group_account_dao,
         messenger=messenger,
         account_dao=account_dao,
+        group_lock=group_lock,
     )

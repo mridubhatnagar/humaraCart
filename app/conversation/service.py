@@ -9,9 +9,8 @@ know the other exists, and the router stays thin.
 
 from __future__ import annotations
 
-import threading
-
 from app.accounts.dao import IAccountDAO
+from app.core.locks import IGroupLock
 from app.groups.dao import IGroupAccountDAO, IGroupDAO
 from app.onboarding.service import OnboardingService
 from app.whatsapp.messenger import IMessenger
@@ -43,6 +42,7 @@ class ConversationService:
         group_account_dao: IGroupAccountDAO,
         messenger: IMessenger,
         account_dao: IAccountDAO,
+        group_lock: IGroupLock,
     ) -> None:
         self._account_dao = account_dao
         self._onboarding = onboarding
@@ -52,9 +52,9 @@ class ConversationService:
         self._messenger = messenger
         # Background tasks run on a thread pool: two inbound messages can
         # reach the agent at the same moment and race on its shared LangGraph
-        # checkpoint. One process-wide lock serializes agent turns so that
-        # never happens — cheap at this scale (one household, one process).
-        self._agent_lock = threading.Lock()
+        # checkpoint. A per-group lock serializes agent turns for the same
+        # household so that never happens, without blocking unrelated ones.
+        self._group_lock = group_lock
 
     def handle(self, sender: str, body: str, profile_name: str | None = None) -> None:
         if profile_name:
@@ -90,7 +90,7 @@ class ConversationService:
             )
             return
 
-        with self._agent_lock:
+        with self._group_lock.acquire(group.group_id):
             agent.handle(sender, body, group.group_id, group.address_id)
 
     def _remember_name(self, phone: str, profile_name: str) -> None:

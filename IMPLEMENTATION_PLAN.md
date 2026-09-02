@@ -520,7 +520,11 @@ trim or blur the login screen in post and keep the *"linked ✓"* result on came
 ## 12. Path to Production
 
 Because the demo already uses the real MCP, the gap is small:
-- Swap the OAuth redirect/localhost for the production callback; obtain production credentials via Swiggy's review (submit the demo video).
+- Swap the OAuth redirect/localhost for the production callback:
+  `https://humaracart.mridulabs.dev/oauth/callback` (submitted to Swiggy for
+  whitelisting; matches the `/oauth/callback` route in `app/routers/oauth.py`,
+  not the throwaway `scripts/verify_swiggy.py` localhost path). Obtain
+  production credentials via Swiggy's review (submit the demo video).
 - Add the deferred layers as they're needed: Postgres/Redis, LangSmith, order-tracking broadcast, V2 reorder intelligence.
 - Nothing above the `IInstamartClient` seam changes.
 
